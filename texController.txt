@@ -1,0 +1,125 @@
+service
+@Service
+public class ApiService {
+    private final OkHttpClient httpClient;
+    private final ObjectMapper objectMapper;
+
+    public ApiService() {
+        this.httpClient = new OkHttpClient();
+        this.objectMapper = new ObjectMapper();
+    }
+
+    public ApiResponse makeApiCall(String token, String clientId, String url, Map<String, Object> body) throws IOException {
+        MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+
+        RequestBody requestBody = RequestBody.create(JSON, objectMapper.writeValueAsString(body));
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer " + token)
+                .addHeader("Client-Id", clientId)
+                .post(requestBody)
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            return objectMapper.readValue(response.body().string(), ApiResponse.class);
+        }
+    }
+}
+********************************************************************************************************************************
+
+response
+@Data
+public class ApiResponse {
+    private String message;
+    private Object data;
+}
+
+********************************************************************************************************************************
+
+controller
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+    private final ApiService apiService;
+
+    public ApiController(ApiService apiService) {
+        this.apiService = apiService;
+    }
+
+    @PostMapping("/external-api")
+    public ApiResponse callExternalApi(@RequestBody Map<String, Object> requestBody, HttpServletRequest httpServletRequest) {
+        String token = httpServletRequest.getHeader("Authorization");
+        String clientId = httpServletRequest.getHeader("Client-Id");
+
+        try {
+            ApiResponse response = apiService.makeApiCall(token, clientId, "https://external-api.com", requestBody);
+            return response;
+        } catch (IOException e) {
+            return new ApiResponse("Error calling external API", null);
+        }
+    }
+}
+
+********************************************************************************************************************************
+
+configuration
+@Configuration
+public class AppConfig implements WebMvcConfigurer {
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new AuthInterceptor())
+                .excludePathPatterns("/login") // excluimos el endpoint para autenticarse
+                .addPathPatterns("/**"); // todos los demás endpoints requieren autenticación
+    }
+}
+
+
+********************************************************************************************************************************
+interceptor cookies
+public class AuthInterceptor implements HandlerInterceptor {
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        String token = request.getHeader("Authorization");
+
+        if (token == null) {
+            // si no hay token en las cabeceras, verificamos si hay una cookie de sesión
+            Cookie[] cookies = request.getCookies();
+            if (cookies != null) {
+                for (Cookie cookie : cookies) {
+                    if (cookie.getName().equals("authToken")) {
+                        token = cookie.getValue();
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (token == null) {
+            // si no hay token en las cabeceras ni en las cookies, redirigimos al endpoint para autenticarse
+            response.sendRedirect("/login");
+            return false;
+        }
+
+        // aquí verificaríamos el token para asegurarnos de que es válido
+        // si el token es inválido, redirigimos al endpoint para autenticarse
+
+        return true;
+    }
+}
+
+
+********************************************************************************************************************************
+login
+@RestController
+public class AuthController {
+    @PostMapping("/login")
+    public void login(HttpServletResponse response) {
+        Cookie cookie = new Cookie("authToken", "someToken");
+        cookie.setHttpOnly(true);
+        cookie.setMaxAge(3600); // la cookie expira en 1 hora
+        cookie.setPath("/"); // la cookie es válida para todo el sitio
+        response.addCookie(cookie);
+    }
+}
+
