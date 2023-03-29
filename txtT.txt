@@ -1,0 +1,448 @@
+En springboot:
+Podrias darme un microservicio rest maven con lombok, en el cual la logica este en un service y las peticiones en un controller que consuma una api externa a la cual se le haga un post con con un json similar al siguiente:
+{
+    "paramId": {
+        "PENUMPE": "51874783"
+    }
+}
+La respuesta de esta api externa se guarde en un model.
+Para hacer la peticion a la api externa es necesario que en el header de la peticion post a la api externa se le agregue un token de autorizacion y un client id, el token es del tipo oauth2 y para la obtencion automatica del token podrias decirme como implementar un mecanismo de autenticación basado en cookies, sin hacer implementacion de login y logout, este token es variable y se obtiene de un api externa-token y vence cada 200 segundos.
+
+Claro, aquí te dejo un ejemplo de un microservicio REST en Spring Boot que cumple con los requisitos que mencionaste:
+
+Primero, asegúrate de tener las dependencias de Spring Web, Lombok y Jackson en tu archivo pom.xml. Además, agregaremos la dependencia de Spring Security para poder manejar la autenticación basada en cookies:
+
+xml
+Copy code
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.projectlombok</groupId>
+        <artifactId>lombok</artifactId>
+        <optional>true</optional>
+    </dependency>
+    <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+</dependencies>
+Luego, creamos nuestro modelo que representará la respuesta de la API externa:
+
+java
+Copy code
+@Data // Usamos Lombok para evitar tener que escribir getters, setters y constructores
+public class ExternalApiResponse {
+    private String message;
+    private List<SomeData> data;
+}
+
+@Data
+public class SomeData {
+    private String id;
+    private String name;
+    private String description;
+}
+A continuación, creamos nuestro servicio que se encargará de hacer la llamada a la API externa. Para la autenticación basada en cookies, usaremos un RestTemplate personalizado que incluirá el token en los headers de cada petición que hagamos. Para obtener el token, usaremos el OAuth2RestTemplate de Spring Security:
+
+java
+Copy code
+@Service
+public class ExternalApiService {
+
+    @Autowired
+    private OAuth2RestTemplate oAuth2RestTemplate;
+
+    public ExternalApiResponse makeExternalApiCall(String paramValue) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "Bearer " + oAuth2RestTemplate.getAccessToken().getValue());
+        headers.set("Client-Id", "your-client-id");
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        Map<String, String> paramMap = new HashMap<>();
+        paramMap.put("PENUMPE", paramValue);
+
+        Map<String, Map<String, String>> request = new HashMap<>();
+        request.put("paramId", paramMap);
+
+        HttpEntity<Map<String, Map<String, String>>> entity = new HttpEntity<>(request, headers);
+
+        ResponseEntity<ExternalApiResponse> response = oAuth2RestTemplate.exchange(
+                "http://your-external-api-url.com",
+                HttpMethod.POST,
+                entity,
+                ExternalApiResponse.class
+        );
+
+        return response.getBody();
+    }
+
+    // Configuramos nuestro RestTemplate personalizado que incluirá el token en los headers
+    @Bean
+    public OAuth2RestTemplate oAuth2RestTemplate(OAuth2ClientContext oAuth2ClientContext) {
+        OAuth2ProtectedResourceDetails details = new ClientCredentialsResourceDetails();
+        details.setClientId("your-client-id");
+        details.setClientSecret("your-client-secret");
+        details.setAccessTokenUri("http://your-token-url.com");
+
+        return new OAuth2RestTemplate(details, oAuth2ClientContext);
+    }
+
+}
+Por último, creamos nuestro controlador que manejará las peticiones REST. Aquí simplemente usaremos nuestro servicio para hacer la llamada a la API externa y devolver la respuesta:
+
+java
+Copy code
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+
+    @Autowired
+    private ExternalApiService externalApiService;
+
+
+
+
+fgrim192@gmail.com
+podrias repetir el controlador
+¡Por supuesto! Aquí te dejo el controlador completo:
+
+java
+Copy code
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+
+    @Autowired
+    private ExternalApiService externalApiService;
+
+    @PostMapping("/external")
+    public ResponseEntity<ExternalApiResponse> callExternalApi(@RequestBody Map<String, String> request) {
+        String paramValue = request.get("PENUMPE");
+
+        ExternalApiResponse response = externalApiService.makeExternalApiCall(paramValue);
+
+        return ResponseEntity.ok(response);
+    }
+
+}
+Este controlador tiene un método callExternalApi que se encarga de recibir una petición POST en la URL /api/external, con un cuerpo de tipo JSON que contiene un objeto con una propiedad llamada PENUMPE. Luego, se llama al método makeExternalApiCall del servicio ExternalApiService, pasándole el valor de PENUMPE como parámetro. Finalmente, se devuelve la respuesta de la API externa en la respuesta del método callExternalApi.
+
+
+
+
+fgrim192@gmail.com
+pero si el token vence cada 200 segundos, si se estara renovando?
+¡Buena pregunta! En el código que te mostré anteriormente, el token de autorización no se renueva automáticamente. Por lo tanto, tendrás que implementar una lógica de renovación de tokens para asegurarte de que siempre tengas un token válido para realizar las solicitudes a la API externa.
+
+Hay diferentes enfoques para implementar la renovación de tokens. Una posible solución es utilizar un programador de tareas (como ScheduledExecutorService de Java) para ejecutar una tarea en segundo plano cada cierto tiempo para renovar el token antes de que expire.
+
+Aquí te muestro un ejemplo de cómo podrías implementar la renovación automática del token utilizando ScheduledExecutorService:
+
+java
+Copy code
+@Component
+public class TokenRenewalService {
+
+    private String token;
+    private long expirationTime;
+
+    @Autowired
+    private TokenApiService tokenApiService;
+
+    @PostConstruct
+    private void init() {
+        // Obtiene el token por primera vez
+        refreshToken();
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public boolean isTokenExpired() {
+        return System.currentTimeMillis() > expirationTime;
+    }
+
+    public synchronized void refreshToken() {
+        TokenApiResponse response = tokenApiService.getToken();
+        token = response.getToken();
+        expirationTime = System.currentTimeMillis() + (response.getExpiresIn() * 1000);
+    }
+
+    @Scheduled(fixedDelay = 180000) // Se ejecuta cada 180 segundos (3 minutos)
+    public synchronized void renewTokenIfNeeded() {
+        if (isTokenExpired()) {
+            refreshToken();
+        }
+    }
+}
+En este ejemplo, TokenRenewalService es un servicio que se encarga de renovar el token de autorización. Tiene una propiedad token que almacena el token actual y una propiedad expirationTime que almacena la hora de expiración del token en milisegundos. El método getToken devuelve el token actual, y el método isTokenExpired verifica si el token ha expirado.
+
+El método refreshToken se encarga de obtener un nuevo token llamando al servicio TokenApiService y actualizar la propiedad token y expirationTime con los valores obtenidos. Este método es sincronizado para evitar problemas de concurrencia si hay varias solicitudes simultáneas que intentan renovar el token.
+
+El método renewTokenIfNeeded se ejecuta cada 180 segundos (3 minutos) para comprobar si el token ha expirado. Si ha expirado, llama al método refreshToken para obtener un nuevo token.
+
+Con esta implementación, el token se renovará automáticamente cada 180 segundos antes de que expire, lo que debería ser suficiente para mantener el token válido para realizar solicitudes a la API externa.
+
+
+
+
+fgrim192@gmail.com
+como quedaria el resto del codigo con esta nueva im´plementacion?
+Con la implementación del TokenRenewalService que te mostré anteriormente, tendrías que hacer algunos cambios en el código existente para utilizar el token renovado. Aquí te muestro cómo quedaría el servicio ExternalApiService y el controlador ApiController con la integración del TokenRenewalService:
+
+java
+Copy code
+@Service
+public class ExternalApiService {
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @Autowired
+    private TokenRenewalService tokenRenewalService;
+
+    private final String apiUrl = "https://api.externa.com";
+
+    public ExternalApiResponse makeExternalApiCall(String paramValue) {
+        // Verifica si el token ha expirado y lo renueva si es necesario
+        if (tokenRenewalService.isTokenExpired()) {
+            tokenRenewalService.refreshToken();
+        }
+
+        // Prepara el objeto de solicitud
+        ExternalApiRequest request = new ExternalApiRequest(paramValue);
+
+        // Prepara el encabezado con el token de autorización
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(tokenRenewalService.getToken());
+        headers.set("client_id", "tu_client_id");
+
+        // Realiza la solicitud a la API externa
+        ResponseEntity<ExternalApiResponse> responseEntity = restTemplate.postForEntity(apiUrl, new HttpEntity<>(request, headers), ExternalApiResponse.class);
+
+        return responseEntity.getBody();
+    }
+
+}
+
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+
+    @Autowired
+    private ExternalApiService externalApiService;
+
+    @PostMapping("/external")
+    public ResponseEntity<ExternalApiResponse> callExternalApi(@RequestBody Map<String, String> request) {
+        String paramValue = request.get("PENUMPE");
+
+        ExternalApiResponse response = externalApiService.makeExternalApiCall(paramValue);
+
+        return ResponseEntity.ok(response);
+    }
+
+}
+En el método makeExternalApiCall del servicio ExternalApiService, se verifica si el token ha expirado llamando al método isTokenExpired del TokenRenewalService. Si el token ha expirado, se llama al método refreshToken para obtener un nuevo token antes de realizar la solicitud a la API externa.
+
+En el encabezado de la solicitud, se utiliza el token de autorización actualizado que se obtiene llamando al método getToken del TokenRenewalService.
+
+Con esta implementación, el token se renovará automáticamente antes de que expire, lo que debería ser suficiente para mantener el token válido para realizar solicitudes a la API externa.
+
+
+
+
+fgrim192@gmail.com
+como deberia ser el modelo que representará la respuesta de la API externa si el objeto es similar a este:
+{
+  "partyRec": {
+      "partyId": "51874783",
+      "partyInfo": {
+          "customerType": "Party",
+          "fiscalActivityInd": true,
+          "establishedDt": "0001-01-01",
+          "originatingBranchCode": "5516",
+          "originatingChannelCode": "000",
+          "serviceLevelCode": "007",
+          "serviceLevelDesc": "RMA A",
+          "partyPersonalInfo": {
+              "birthDt": "1988-06-06",
+              "maritalStat": "Single",
+              "gender": "Female",
+              "personName": {
+                  "givenName": "DACIA",
+                  "paternalName": "HURTAZO",
+                  "maternalName": "VILLEGAS"
+              }
+          },
+          "issueIdent": [
+              {
+                  "issueIdentType": "TaxIdNb",
+                  "issueIdentValue": "HUVD880606MT0",
+                  "partyIssueIdentId": "51"
+              }
+          ],
+          "birdCountry": {
+              "countryCodeValue": "052"
+          }
+      }
+  }
+}
+El modelo que representaría la respuesta de la API externa sería algo similar a esto:
+
+java
+Copy code
+public class ExternalApiResponse {
+
+    @JsonProperty("partyRec")
+    private PartyRecord partyRecord;
+
+    public PartyRecord getPartyRecord() {
+        return partyRecord;
+    }
+
+    public void setPartyRecord(PartyRecord partyRecord) {
+        this.partyRecord = partyRecord;
+    }
+
+    public static class PartyRecord {
+        @JsonProperty("partyId")
+        private String partyId;
+
+        @JsonProperty("partyInfo")
+        private PartyInfo partyInfo;
+
+        public String getPartyId() {
+            return partyId;
+        }
+
+        public void setPartyId(String partyId) {
+            this.partyId = partyId;
+        }
+
+        public PartyInfo getPartyInfo() {
+            return partyInfo;
+        }
+
+        public void setPartyInfo(PartyInfo partyInfo) {
+            this.partyInfo = partyInfo;
+        }
+    }
+
+    public static class PartyInfo {
+        @JsonProperty("customerType")
+        private String customerType;
+
+        @JsonProperty("fiscalActivityInd")
+        private Boolean fiscalActivityInd;
+
+        @JsonProperty("establishedDt")
+        private String establishedDt;
+
+        @JsonProperty("originatingBranchCode")
+        private String originatingBranchCode;
+
+        @JsonProperty("originatingChannelCode")
+        private String originatingChannelCode;
+
+        @JsonProperty("serviceLevelCode")
+        private String serviceLevelCode;
+
+        @JsonProperty("serviceLevelDesc")
+        private String serviceLevelDesc;
+
+        @JsonProperty("partyPersonalInfo")
+        private PartyPersonalInfo partyPersonalInfo;
+
+        @JsonProperty("issueIdent")
+        private List<IssueIdent> issueIdent;
+
+        @JsonProperty("birdCountry")
+        private BirdCountry birdCountry;
+
+        public String getCustomerType() {
+            return customerType;
+        }
+
+        public void setCustomerType(String customerType) {
+            this.customerType = customerType;
+        }
+
+        public Boolean getFiscalActivityInd() {
+            return fiscalActivityInd;
+        }
+
+        public void setFiscalActivityInd(Boolean fiscalActivityInd) {
+            this.fiscalActivityInd = fiscalActivityInd;
+        }
+
+        public String getEstablishedDt() {
+            return establishedDt;
+        }
+
+        public void setEstablishedDt(String establishedDt) {
+            this.establishedDt = establishedDt;
+        }
+
+        public String getOriginatingBranchCode() {
+            return originatingBranchCode;
+        }
+
+        public void setOriginatingBranchCode(String originatingBranchCode) {
+            this.originatingBranchCode = originatingBranchCode;
+        }
+
+        public String getOriginatingChannelCode() {
+            return originatingChannelCode;
+        }
+
+        public void setOriginatingChannelCode(String originatingChannelCode) {
+            this.originatingChannelCode = originatingChannelCode;
+        }
+
+        public String getServiceLevelCode() {
+            return serviceLevelCode;
+        }
+
+        public void setServiceLevelCode(String serviceLevelCode) {
+            this.serviceLevelCode = serviceLevelCode;
+        }
+
+        public String getServiceLevelDesc() {
+            return serviceLevelDesc;
+        }
+
+        public void setServiceLevelDesc(String serviceLevelDesc) {
+            this.serviceLevelDesc = serviceLevelDesc;
+        }
+
+        public PartyPersonalInfo getPartyPersonalInfo() {
+            return partyPersonalInfo;
+        }
+
+        public void setPartyPersonalInfo(PartyPersonalInfo partyPersonalInfo) {
+            this.partyPersonalInfo = partyPersonalInfo;
+        }
+
+        public List<IssueIdent> getIssueIdent() {
+            return issueIdent;
+        }
+
+        public void setIssueIdent(List<IssueIdent> issueIdent) {
+            this.issueIdent = issueIdent;
+        }
+
+        public BirdCountry getBirdCountry() {
+            return birdCountry;
+        }
+
+        public void setBirdCountry(BirdCountry birdCountry) {
+            this.b
